@@ -1,1 +1,1 @@
-Simple Reactive ChatGPT Discord Bot
+Simple Spring Boot Reactive ChatGPT Discord Bot
