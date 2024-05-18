@@ -25,7 +25,6 @@ dependencies {
 	implementation 'org.springframework.ai:spring-ai-openai-spring-boot-starter'
 	implementation 'com.discord4j:discord4j-core:3.3.0-RC1'
 	compileOnly 'org.projectlombok:lombok:1.18.32'
-	developmentOnly 'org.springframework.boot:spring-boot-docker-compose'
 }
 
 dependencyManagement {

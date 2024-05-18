@@ -5,7 +5,6 @@ import discord4j.core.DiscordClientBuilder;
 import discord4j.core.GatewayDiscordClient;
 import discord4j.core.event.domain.Event;
 import org.springframework.ai.chat.ChatClient;
-import org.springframework.ai.chat.prompt.Prompt;
 import org.springframework.ai.openai.OpenAiChatClient;
 import org.springframework.ai.openai.OpenAiChatOptions;
 import org.springframework.ai.openai.api.OpenAiApi;
@@ -35,7 +34,7 @@ public class DiscordBotConfiguration {
         for (EventListener<T> listener : eventListeners) {
             assert client != null;
             client.on(listener.getEventType())
-                    .flatMap(listener::execute)
+                    .flatMap(listener::processEvent)
                     .onErrorResume(listener::handleError)
                     .subscribe();
         }
