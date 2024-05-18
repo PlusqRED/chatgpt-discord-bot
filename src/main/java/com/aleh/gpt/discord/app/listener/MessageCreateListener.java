@@ -37,6 +37,15 @@ public class MessageCreateListener implements EventListener<MessageCreateEvent> 
         return MessageCreateEvent.class;
     }
 
+    /**
+     * Processes the event of a new message creation.
+     * The method filters out messages from bots and messages that do not start with "==" prefix.
+     * The method sends a message to the chat client and updates the message content with the response.
+     * The method logs the retrieved request and the combined response.
+     *
+     * @param event the event of a new message creation
+     * @return a {@link Mono} of the void type
+     */
     @Override
     public Mono<Void> processEvent(MessageCreateEvent event) {
         return getMessageStartingWithEquals(event)
@@ -44,6 +53,13 @@ public class MessageCreateListener implements EventListener<MessageCreateEvent> 
                 .then();
     }
 
+    /**
+     * Processes the message by sending an editable thinking message, updating the message content with the response,
+     * and logging the combined response.
+     *
+     * @param message the message to process
+     * @return a {@link Flux} of the {@link Message} type
+     */
     private Flux<Message> processMessage(Message message) {
         StringBuilder combinedStringBuilder = new StringBuilder();
         return sendEditableThinkingMessage(message)
@@ -53,11 +69,23 @@ public class MessageCreateListener implements EventListener<MessageCreateEvent> 
                 .doOnComplete(() -> logRetrievedCombinedResponse(combinedStringBuilder));
     }
 
+    /**
+     * Sends an editable thinking message to the channel of the message.
+     *
+     * @param message the message to send the editable thinking message to
+     * @return a {@link Mono} of the {@link Message} type
+     */
     private Mono<Message> sendEditableThinkingMessage(Message message) {
         return message.getChannel()
                 .flatMap(channel -> channel.createMessage("Думаю, что бы такого тебе ответить..."));
     }
 
+    /**
+     * Retrieves the message starting with the "==" prefix.
+     *
+     * @param event the event of a new message creation
+     * @return a {@link Mono} of the {@link Message} type
+     */
     private Mono<Message> getMessageStartingWithEquals(MessageCreateEvent event) {
         return Mono.just(event.getMessage())
                 .filter(message -> message.getAuthor().map(user -> !user.isBot()).orElse(true))
@@ -81,12 +109,27 @@ public class MessageCreateListener implements EventListener<MessageCreateEvent> 
         }
     }
 
+    /**
+     * Streams and filters chat messages.
+     * The method filters out blank messages and buffers the messages by the discord bot answering speed.
+     *
+     * @param message the message to stream and filter chat messages
+     * @return a {@link Flux} of the {@link List} of the {@link String} type
+     */
     private Flux<List<String>> streamAndFilterChatMessages(Message message) {
         return chatClient.stream(message.getContent())
                 .filter(partOfTheMessage -> !partOfTheMessage.isBlank())
                 .buffer(Integer.parseInt(discordBotAnsweringSpeed));
     }
 
+    /**
+     * The method sends the user message to the ChatGPT and updates the content with the response.
+     *
+     * @param message                           the message to update the content with the response
+     * @param sendUserMessageToChatClientStream the stream to send the user message to the chat client
+     * @param combinedStringBuilder             the combined string builder to update the content with the response
+     * @return a {@link Flux} of the {@link Message} type
+     */
     private Flux<Message> updateMessageContent(
             Message message,
             Flux<List<String>> sendUserMessageToChatClientStream,
@@ -102,6 +145,13 @@ public class MessageCreateListener implements EventListener<MessageCreateEvent> 
         );
     }
 
+    /**
+     * Combines the strings.
+     *
+     * @param partOfTheMessage the part of the message to combine
+     * @param combinedStringBuilder the combined string builder to combine the strings
+     * @return the combined string
+     */
     private String combineStrings(List<String> partOfTheMessage, StringBuilder combinedStringBuilder) {
         partOfTheMessage.forEach(combinedStringBuilder::append);
         return combinedStringBuilder.toString();
