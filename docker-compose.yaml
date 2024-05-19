@@ -1,7 +1,7 @@
 version: '3.8'
 services:
   discord_bot:
-    build: .
+    image: grape2000/chatgpt-discord-bot
     ports:
       - '8080:8080'
     environment:
@@ -13,9 +13,18 @@ services:
       - 'OPENAI-MEMORY-MESSAGES-FORGET-COUNT=3'
       - 'OPENAI-MEMORY-DURATION-MINUTES=180'
       - 'OPENAI-ASSISTANT-PREPROMPT=I am a highly intelligent question answering bot. If you have any questions, feel free to ask.'
+      - 'REDIS_HOST=redis'
+      - 'REDIS_PORT=6379'
     depends_on:
       - redis
+    networks:
+      - common_network
   redis:
     image: redis:latest
     ports:
       - '6379:6379'
+    networks:
+      - common_network
+
+networks:
+  common_network:
