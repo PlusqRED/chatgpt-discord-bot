@@ -86,11 +86,15 @@ public class MessageCreateListener implements EventListener<MessageCreateEvent> 
                 .collectList()
                 .filter(history -> !history.isEmpty())
                 .switchIfEmpty(Mono.just(new ArrayList<>(Collections.singletonList(new Message("system", assistantPrePrompt)))))
-                .doOnNext(history -> history.add(new Message(role, content)))
+                .doOnNext(history -> history.add(new Message(role, removeUserNameFromContent(discordUserName, content))))
                 .map(this::trimHistoryIfBig)
                 .flatMap(history -> redisRepository.flushAll(discordUserName)
                         .then(redisRepository.save(discordUserName, history))
                 );
+    }
+
+    private String removeUserNameFromContent(String discordUserName, String content) {
+        return content.replaceFirst("\\[" + discordUserName + "\\] ", "");
     }
 
     private String getDiscordUserName(discord4j.core.object.entity.Message message) {
