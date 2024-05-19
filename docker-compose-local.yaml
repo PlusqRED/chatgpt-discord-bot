@@ -1,9 +1,6 @@
 version: '3.8'
 services:
-  discord_bot:
-    build: .
+  redis:
+    image: redis:latest
     ports:
-      - '8080:8080'
-    environment:
-      - 'DISCORD_BOT_TOKEN=token'
-      - 'SPRING-AI-OPENAI-API-KEY=token'
+      - '6379:6379'

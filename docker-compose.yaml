@@ -6,4 +6,16 @@ services:
       - '8080:8080'
     environment:
       - 'DISCORD_BOT_TOKEN=token'
-      - 'SPRING-AI-OPENAI-API-KEY=token'
+      - 'OPENAI-API-KEY=token'
+      - 'OPENAI-ACTIVE-MODEL=gpt-3.5-turbo-0125'
+      - 'OPENAI-API-URL=https://api.openai.com'
+      - 'OPENAI-MEMORY-MESSAGES-COUNT=450'
+      - 'OPENAI-MEMORY-MESSAGES-FORGET-COUNT=3'
+      - 'OPENAI-MEMORY-DURATION-MINUTES=180'
+      - 'OPENAI-ASSISTANT-PREPROMPT=I am a highly intelligent question answering bot. If you have any questions, feel free to ask.'
+    depends_on:
+      - redis
+  redis:
+    image: redis:latest
+    ports:
+      - '6379:6379'

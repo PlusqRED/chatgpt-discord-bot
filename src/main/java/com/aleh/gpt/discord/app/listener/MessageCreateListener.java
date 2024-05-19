@@ -1,17 +1,23 @@
 package com.aleh.gpt.discord.app.listener;
 
+import com.aleh.gpt.discord.app.client.ChatClient;
+import com.aleh.gpt.discord.app.dao.cache.repository.RedisRepository;
+import com.aleh.gpt.discord.app.dto.request.ChatRequest;
+import com.aleh.gpt.discord.app.dto.request.Message;
+import com.aleh.gpt.discord.app.dto.response.ChatCompletionChunk;
+import com.aleh.gpt.discord.app.dto.response.Choice;
+import com.aleh.gpt.discord.app.dto.response.Delta;
 import discord4j.core.event.domain.message.MessageCreateEvent;
-import discord4j.core.object.entity.Message;
 import discord4j.core.object.entity.User;
 import discord4j.core.spec.MessageEditSpec;
 import discord4j.discordjson.possible.Possible;
-import org.springframework.ai.openai.OpenAiChatClient;
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
+import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -19,17 +25,29 @@ import java.util.concurrent.atomic.AtomicInteger;
 @Service
 public class MessageCreateListener implements EventListener<MessageCreateEvent> {
 
-    private final String discordBotAnsweringSpeed;
-    private final OpenAiChatClient chatClient;
+    private final ChatClient chatClient;
+    private final RedisRepository redisRepository;
     private final AtomicInteger servedUsersCount = new AtomicInteger(0);
 
-    @Autowired
-    public MessageCreateListener(
-            OpenAiChatClient chatClient,
-            @Value("${discord.bot.answering-speed}") String discordBotAnsweringSpeed
-    ) {
+    @Value("${discord.bot.answering-speed}")
+    private String discordBotAnsweringSpeed;
+
+    @Value("${openai.active-model}")
+    private String gptModel;
+
+    @Value("${openai.memory-messages-count}")
+    private String memoryMessagesCount;
+
+    @Value("${openai.memory-messages-forget-count}")
+    private String memoryMessagesForgetCount;
+
+    @Value("${openai.assistant-preprompt}")
+    private String assistantPrePrompt;
+
+
+    public MessageCreateListener(ChatClient chatClient, RedisRepository redisRepository) {
         this.chatClient = chatClient;
-        this.discordBotAnsweringSpeed = discordBotAnsweringSpeed;
+        this.redisRepository = redisRepository;
     }
 
     @Override
@@ -37,15 +55,6 @@ public class MessageCreateListener implements EventListener<MessageCreateEvent> 
         return MessageCreateEvent.class;
     }
 
-    /**
-     * Processes the event of a new message creation.
-     * The method filters out messages from bots and messages that do not start with "==" prefix.
-     * The method sends a message to the chat client and updates the message content with the response.
-     * The method logs the retrieved request and the combined response.
-     *
-     * @param event the event of a new message creation
-     * @return a {@link Mono} of the void type
-     */
     @Override
     public Mono<Void> processEvent(MessageCreateEvent event) {
         return getMessageStartingWithEquals(event)
@@ -53,51 +62,59 @@ public class MessageCreateListener implements EventListener<MessageCreateEvent> 
                 .then();
     }
 
-    /**
-     * Processes the message by sending an editable thinking message, updating the message content with the response,
-     * and logging the combined response.
-     *
-     * @param message the message to process
-     * @return a {@link Flux} of the {@link Message} type
-     */
-    private Flux<Message> processMessage(Message message) {
-        StringBuilder combinedStringBuilder = new StringBuilder();
-        return sendEditableThinkingMessage(message)
-                .flatMapMany(thinkingMessage ->
-                        updateMessageContent(thinkingMessage, streamAndFilterChatMessages(message), combinedStringBuilder)
-                )
-                .doOnComplete(() -> logRetrievedCombinedResponse(combinedStringBuilder));
-    }
-
-    /**
-     * Sends an editable thinking message to the channel of the message.
-     *
-     * @param message the message to send the editable thinking message to
-     * @return a {@link Mono} of the {@link Message} type
-     */
-    private Mono<Message> sendEditableThinkingMessage(Message message) {
-        return message.getChannel()
-                .flatMap(channel -> channel.createMessage("Думаю, что бы такого тебе ответить..."));
-    }
-
-    /**
-     * Retrieves the message starting with the "==" prefix.
-     *
-     * @param event the event of a new message creation
-     * @return a {@link Mono} of the {@link Message} type
-     */
-    private Mono<Message> getMessageStartingWithEquals(MessageCreateEvent event) {
-        return Mono.just(event.getMessage())
-                .filter(message -> message.getAuthor().map(user -> !user.isBot()).orElse(true))
-                .filter(message -> message.getContent().startsWith("=="))
-                .doOnNext(MessageCreateListener::logRetrievedRequest);
-    }
-
-    private static void logRetrievedRequest(Message message) {
+    private static void logRetrievedRequest(discord4j.core.object.entity.Message message) {
         LOG.info("Request retrieved. Author: {}, Content: {}",
                 message.getAuthor().map(User::getUsername).orElse("Hidden Username"),
                 message.getContent()
         );
+    }
+
+    private Mono<Void> processMessage(discord4j.core.object.entity.Message message) {
+        String userName = message.getAuthor().map(User::getUsername).map(un -> "[" + un + "] ").orElse("[Unknown] ");
+        StringBuilder combinedStringBuilder = new StringBuilder(userName);
+
+        return sendEditableThinkingMessage(message)
+                .flatMapMany(thinkingMessage ->
+                        updateMessageContent(thinkingMessage, streamChatMessages(message), combinedStringBuilder)
+                )
+                .doOnComplete(() -> logRetrievedCombinedResponse(combinedStringBuilder))
+                .then(Mono.defer(() -> temporaryStoreMessage(getDiscordUserName(message), "assistant", combinedStringBuilder.toString())));
+    }
+
+    private Mono<Void> temporaryStoreMessage(String discordUserName, String role, String content) {
+        return redisRepository.find(discordUserName)
+                .collectList()
+                .filter(history -> !history.isEmpty())
+                .switchIfEmpty(Mono.just(new ArrayList<>(Collections.singletonList(new Message("system", assistantPrePrompt)))))
+                .doOnNext(history -> history.add(new Message(role, content)))
+                .map(this::trimHistoryIfBig)
+                .flatMap(history -> redisRepository.flushAll(discordUserName)
+                        .then(redisRepository.save(discordUserName, history))
+                );
+    }
+
+    private String getDiscordUserName(discord4j.core.object.entity.Message message) {
+        return message.getAuthor().map(User::getUsername).orElse("-=-Unknown-=-");
+    }
+
+    private List<Message> trimHistoryIfBig(List<Message> history) {
+        if (history.size() > Integer.parseInt(memoryMessagesCount)) {
+            return history.subList(Integer.parseInt(memoryMessagesForgetCount), history.size());
+        } else {
+            return history;
+        }
+    }
+
+    private Mono<discord4j.core.object.entity.Message> sendEditableThinkingMessage(discord4j.core.object.entity.Message message) {
+        return message.getChannel()
+                .flatMap(channel -> channel.createMessage("Думаю, что бы такого тебе ответить..."));
+    }
+
+    private Mono<discord4j.core.object.entity.Message> getMessageStartingWithEquals(MessageCreateEvent event) {
+        return Mono.just(event.getMessage())
+                .filter(message -> message.getAuthor().map(user -> !user.isBot()).orElse(true))
+                .filter(message -> message.getContent().startsWith("=="))
+                .doOnNext(MessageCreateListener::logRetrievedRequest);
     }
 
     private void logRetrievedCombinedResponse(StringBuilder combinedStringBuilder) {
@@ -109,51 +126,50 @@ public class MessageCreateListener implements EventListener<MessageCreateEvent> 
         }
     }
 
-    /**
-     * Streams and filters chat messages.
-     * The method filters out blank messages and buffers the messages by the discord bot answering speed.
-     *
-     * @param message the message to stream and filter chat messages
-     * @return a {@link Flux} of the {@link List} of the {@link String} type
-     */
-    private Flux<List<String>> streamAndFilterChatMessages(Message message) {
-        return chatClient.stream(message.getContent())
-                .filter(partOfTheMessage -> !partOfTheMessage.isBlank())
-                .buffer(Integer.parseInt(discordBotAnsweringSpeed));
+    private Flux<List<ChatCompletionChunk>> streamChatMessages(discord4j.core.object.entity.Message message) {
+        return temporaryStoreMessage(getDiscordUserName(message), "user", message.getContent())
+                .thenMany(redisRepository.find(getDiscordUserName(message))
+                        .collectList()
+                        .filterWhen(history -> isHistorySizeValid(getDiscordUserName(message)))
+                        .switchIfEmpty(eraseBeginningIfHistoryBig(message))
+                        .flatMapMany(history -> chatClient.chatCompletions(new ChatRequest(gptModel, history, true))
+                                .buffer(Integer.parseInt(discordBotAnsweringSpeed))));
     }
 
-    /**
-     * The method sends the user message to the ChatGPT and updates the content with the response.
-     *
-     * @param message                           the message to update the content with the response
-     * @param sendUserMessageToChatClientStream the stream to send the user message to the chat client
-     * @param combinedStringBuilder             the combined string builder to update the content with the response
-     * @return a {@link Flux} of the {@link Message} type
-     */
-    private Flux<Message> updateMessageContent(
-            Message message,
-            Flux<List<String>> sendUserMessageToChatClientStream,
+    private Mono<Boolean> isHistorySizeValid(String discordUserName) {
+        return redisRepository.count(discordUserName).map(count -> count < Integer.parseInt(memoryMessagesCount));
+    }
+
+    private Mono<List<Message>> eraseBeginningIfHistoryBig(discord4j.core.object.entity.Message message) {
+        return Mono.defer(() ->
+                redisRepository.flushFromBeginning(Integer.parseInt(memoryMessagesForgetCount), getDiscordUserName(message))
+                        .thenMany(redisRepository.find(getDiscordUserName(message)))
+                        .collectList());
+    }
+
+    private Flux<discord4j.core.object.entity.Message> updateMessageContent(
+            discord4j.core.object.entity.Message message,
+            Flux<List<ChatCompletionChunk>> sendUserMessageToChatClientStream,
             StringBuilder combinedStringBuilder
     ) {
-        return sendUserMessageToChatClientStream.flatMap(partOfTheMessage ->
+        return sendUserMessageToChatClientStream.flatMap(chatCompletionChunks ->
                 message.edit(
                         MessageEditSpec.create()
                                 .withContent(Possible.of(
-                                        Optional.of(combineStrings(partOfTheMessage, combinedStringBuilder)))
+                                        Optional.of(buildCombinedString(chatCompletionChunks, combinedStringBuilder)))
                                 )
                 )
         );
     }
 
-    /**
-     * Combines the strings.
-     *
-     * @param partOfTheMessage the part of the message to combine
-     * @param combinedStringBuilder the combined string builder to combine the strings
-     * @return the combined string
-     */
-    private String combineStrings(List<String> partOfTheMessage, StringBuilder combinedStringBuilder) {
-        partOfTheMessage.forEach(combinedStringBuilder::append);
+    private String buildCombinedString(List<ChatCompletionChunk> messageParts, StringBuilder combinedStringBuilder) {
+        messageParts.stream()
+                .map(ChatCompletionChunk::choices)
+                .map(List::getFirst)
+                .map(Choice::delta)
+                .map(Delta::content)
+                .forEach(combinedStringBuilder::append);
+
         return combinedStringBuilder.toString();
     }
 
